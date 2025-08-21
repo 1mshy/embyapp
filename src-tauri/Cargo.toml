@@ -1,0 +1,38 @@
+[package]
+name = "embyapp"
+version = "0.1.0"
+description = "Unofficial Emby Desktop App - Free & Open Source"
+authors = ["lucalapenna"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "embyapp_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Optimize for smaller binary size
+[profile.release]
+opt-level = "s"          # Optimize for size
+lto = true               # Enable Link Time Optimization
+codegen-units = 1        # Reduce parallel code generation for better optimization
+panic = "abort"          # Reduce binary size by aborting on panic
+strip = true             # Strip symbols from binary
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Minimal Tauri features for smaller build
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"], default-features = false }
+serde_json = { version = "1", default-features = false }
+# Minimal reqwest features - only what we need
+reqwest = { version = "0.11", features = ["rustls-tls"], default-features = false }
+# Minimal tokio features - only what we need
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
+
