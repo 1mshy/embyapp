@@ -87,22 +87,58 @@ async fn get_tailscale_ips() -> Result<Vec<String>, String> {
     let mut last_error = String::new();
     
     for path in tailscale_paths {
+        // First, try a simple status command to see if tailscale is working
         match Command::new(path)
-            .args(["status", "--json"])
+            .args(["status"])
             .output()
         {
-            Ok(output) => {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    
-                    // Parse the JSON output to extract IP addresses
-                    return match parse_tailscale_status(&stdout) {
-                        Ok(ips) => Ok(ips),
-                        Err(e) => Err(format!("Failed to parse Tailscale status: {}", e))
-                    };
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    last_error = format!("Tailscale command failed: {}", stderr);
+            Ok(simple_output) => {
+                if !simple_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&simple_output.stderr);
+                    println!("Simple tailscale status failed from {}: {}", path, stderr);
+                    last_error = format!("Tailscale not ready from {}: {}", path, stderr);
+                    continue;
+                }
+                
+                // If simple status works, try with JSON
+                match Command::new(path)
+                    .args(["status", "--json"])
+                    .output()
+                {
+                    Ok(output) => {
+                        if output.status.success() {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            let stdout_trimmed = stdout.trim();
+                            
+                            // Debug: print the actual output
+                            println!("Tailscale status output length: {}", stdout_trimmed.len());
+                            if stdout_trimmed.is_empty() {
+                                println!("Tailscale status returned empty output");
+                                last_error = format!("Tailscale status returned empty output from {}", path);
+                                continue;
+                            }
+                            
+                            // Validate JSON before parsing
+                            if !stdout_trimmed.starts_with('{') && !stdout_trimmed.starts_with('[') {
+                                println!("Tailscale status output is not valid JSON: {}", stdout_trimmed);
+                                last_error = format!("Tailscale status output is not valid JSON from {}: {}", path, stdout_trimmed);
+                                continue;
+                            }
+                            
+                            // Parse the JSON output to extract IP addresses
+                            return match parse_tailscale_status(&stdout_trimmed) {
+                                Ok(ips) => Ok(ips),
+                                Err(e) => Err(format!("Failed to parse Tailscale status from {}: {}", path, e))
+                            };
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            last_error = format!("Tailscale JSON command failed from {}: {}", path, stderr);
+                        }
+                    }
+                    Err(e) => {
+                        last_error = format!("Failed to run tailscale JSON command from {}: {}", path, e);
+                        continue;
+                    }
                 }
             }
             Err(e) => {
@@ -125,24 +161,31 @@ async fn get_tailscale_ips() -> Result<Vec<String>, String> {
 }
 
 fn parse_tailscale_status(json_str: &str) -> Result<Vec<String>, String> {
+    if json_str.is_empty() {
+        return Err("Empty JSON string".to_string());
+    }
+    
     let json: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse JSON: {}. Content: '{}'", e, json_str))?;
 
     let mut ips = Vec::new();
+
+    // Debug: Print the structure to understand what we're working with
+    println!("JSON structure keys: {:?}", json.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
 
     // Extract IPs from the peer list
     if let Some(peer_obj) = json.get("Peer") {
         if let Some(peers) = peer_obj.as_object() {
-            for (_, peer_data) in peers {
-                if let Some(tailscale_ips_array) = peer_data.get("TailscaleIPs") {
-                    if let Some(ip_array) = tailscale_ips_array.as_array() {
-                        for ip_val in ip_array {
-                            if let Some(ip_str) = ip_val.as_str() {
-                                // Remove any CIDR notation (e.g., "/32")
-                                let ip = ip_str.split('/').next().unwrap_or(ip_str);
-                                ips.push(ip.to_string());
-                            }
-                        }
+            println!("Found {} peers in Tailscale status", peers.len());
+            for (peer_id, peer_data) in peers {
+                println!("Checking peer: {}", peer_id);
+                
+                // Try different possible field names for IP addresses
+                let ip_fields = ["TailscaleIPs", "Addrs", "Endpoints", "PrimaryRoutes"];
+                
+                for field in ip_fields.iter() {
+                    if let Some(ip_data) = peer_data.get(field) {
+                        extract_ips_from_value(ip_data, &mut ips, &format!("peer {} {}", peer_id, field));
                     }
                 }
             }
@@ -151,20 +194,96 @@ fn parse_tailscale_status(json_str: &str) -> Result<Vec<String>, String> {
 
     // Also check if there's a "Self" entry for the current device
     if let Some(self_data) = json.get("Self") {
-        if let Some(tailscale_ips_array) = self_data.get("TailscaleIPs") {
-            if let Some(ip_array) = tailscale_ips_array.as_array() {
-                for ip_val in ip_array {
-                    if let Some(ip_str) = ip_val.as_str() {
-                        let ip = ip_str.split('/').next().unwrap_or(ip_str);
-                        ips.push(ip.to_string());
-                    }
-                }
+        println!("Checking self data");
+        let ip_fields = ["TailscaleIPs", "Addrs", "Endpoints"];
+        
+        for field in ip_fields.iter() {
+            if let Some(ip_data) = self_data.get(field) {
+                extract_ips_from_value(ip_data, &mut ips, &format!("self {}", field));
             }
         }
     }
 
+    // Alternative: try to find any field that looks like it contains IPs
+    if ips.is_empty() {
+        find_ips_in_json_recursively(&json, &mut ips);
+    }
+
     println!("Found {} Tailscale IPs: {:?}", ips.len(), ips);
+    
+    if ips.is_empty() {
+        return Err("No Tailscale IPs found in the status output".to_string());
+    }
+    
     Ok(ips)
+}
+
+fn extract_ips_from_value(value: &serde_json::Value, ips: &mut Vec<String>, context: &str) {
+    match value {
+        serde_json::Value::Array(array) => {
+            for item in array {
+                if let Some(ip_str) = item.as_str() {
+                    if let Some(ip) = extract_ip_from_string(ip_str) {
+                        println!("Found IP from {} array: {}", context, ip);
+                        ips.push(ip);
+                    }
+                }
+            }
+        }
+        serde_json::Value::String(s) => {
+            if let Some(ip) = extract_ip_from_string(s) {
+                println!("Found IP from {} string: {}", context, ip);
+                ips.push(ip);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_ip_from_string(ip_str: &str) -> Option<String> {
+    // Remove any CIDR notation (e.g., "/32") and port numbers
+    let ip = ip_str.split('/').next()?.split(':').next()?;
+    
+    // Validate it looks like a Tailscale IP (100.x.x.x range)
+    if ip.starts_with("100.") {
+        let parts: Vec<&str> = ip.split('.').collect();
+        if parts.len() == 4 {
+            if let (Ok(first), Ok(second), Ok(_third), Ok(_fourth)) = (
+                parts[0].parse::<u8>(),
+                parts[1].parse::<u8>(),
+                parts[2].parse::<u8>(),
+                parts[3].parse::<u8>()
+            ) {
+                if first == 100 && (64..=127).contains(&second) {
+                    return Some(ip.to_string());
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+fn find_ips_in_json_recursively(value: &serde_json::Value, ips: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            if let Some(ip) = extract_ip_from_string(s) {
+                println!("Found IP recursively: {}", ip);
+                ips.push(ip);
+            }
+        }
+        serde_json::Value::Array(array) => {
+            for item in array {
+                find_ips_in_json_recursively(item, ips);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            for (_, val) in obj {
+                find_ips_in_json_recursively(val, ips);
+            }
+        }
+        _ => {}
+    }
 }
 
 async fn get_tailscale_ips_fallback() -> Result<Vec<String>, String> {
