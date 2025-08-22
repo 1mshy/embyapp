@@ -114,6 +114,50 @@ button {
   border: 1px solid #fab1a0;
 }
 
+.tailscale-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #ddd;
+}
+
+.tailscale-section p {
+  margin-bottom: 1rem;
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.tailscale-button {
+  background-color: #4285f4;
+  color: white;
+  border: none;
+  font-size: 1rem;
+  padding: 0.8rem 1.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: 0 2px 4px rgba(66, 133, 244, 0.2);
+}
+
+.tailscale-button:hover {
+  background-color: #3367d6;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(66, 133, 244, 0.3);
+}
+
+.tailscale-button:active {
+  background-color: #2851a3;
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(66, 133, 244, 0.2);
+}
+
+.tailscale-button:disabled {
+  background-color: #ccc;
+  color: #666;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;
@@ -143,5 +187,26 @@ button {
     background-color: #2e1a1a;
     color: #e57373;
     border: 1px solid #d32f2f;
+  }
+
+  .tailscale-section {
+    border-top: 1px solid #444;
+  }
+
+  .tailscale-section p {
+    color: #aaa;
+  }
+
+  .tailscale-button {
+    background-color: #4285f4;
+  }
+
+  .tailscale-button:hover {
+    background-color: #3367d6;
+  }
+
+  .tailscale-button:disabled {
+    background-color: #555;
+    color: #999;
   }
 }

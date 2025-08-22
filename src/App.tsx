@@ -7,6 +7,7 @@ function App() {
   const [statusMessage, setStatusMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [isFindingOnTailscale, setIsFindingOnTailscale] = useState(false);
 
   // Check for saved server IP on app startup
   useEffect(() => {
@@ -79,6 +80,44 @@ function App() {
     }
   }
 
+  async function findEmbyOnTailscale() {
+    setIsFindingOnTailscale(true);
+    setStatusMessage("Scanning Tailscale network for Emby servers...");
+
+    try {
+      const result = await invoke("find_emby_on_tailscale");
+      
+      if (result) {
+        // Server found, save it and connect
+        const foundIp = result as string;
+        setServerIp(foundIp);
+        localStorage.setItem("emby_server_ip", foundIp);
+        setStatusMessage(`Found Emby server at ${foundIp}! Connecting...`);
+        
+        // Redirect to the found server
+        const url = `http://${foundIp}:8096/web/index.html`;
+        setTimeout(() => {
+          window.location.replace(url);
+        }, 1000);
+      } else {
+        setStatusMessage("No Emby servers found on Tailscale network. Please enter IP manually.");
+      }
+    } catch (error) {
+      let errorMessage = `${error}`;
+      
+      // Provide helpful guidance based on the error
+      if (errorMessage.includes("Tailscale CLI not found")) {
+        errorMessage = "Tailscale not detected. Please install Tailscale from tailscale.com and make sure it's running, then try again.";
+      } else if (errorMessage.includes("No Tailscale devices found")) {
+        errorMessage = "No devices found on Tailscale network. Make sure you're connected to Tailscale and other devices are online.";
+      }
+      
+      setStatusMessage(errorMessage);
+    } finally {
+      setIsFindingOnTailscale(false);
+    }
+  }
+
   if (isInitializing) {
     return (
       <main className="container">
@@ -105,12 +144,25 @@ function App() {
           value={serverIp}
           onChange={(e) => setServerIp(e.currentTarget.value)}
           placeholder="Enter Emby server IP (e.g., 192.168.1.100)"
-          disabled={isLoading}
+          disabled={isLoading || isFindingOnTailscale}
         />
-        <button type="submit" disabled={isLoading}>
+        <button type="submit" disabled={isLoading || isFindingOnTailscale}>
           {isLoading ? "Checking..." : "Connect"}
         </button>
       </form>
+      
+      <div className="tailscale-section">
+        <p>Or let us find your Emby server automatically:</p>
+        <button 
+          type="button" 
+          className="tailscale-button"
+          onClick={findEmbyOnTailscale}
+          disabled={isLoading || isFindingOnTailscale}
+        >
+          {isFindingOnTailscale ? "Scanning Tailscale..." : "🔍 Find on Tailscale"}
+        </button>
+      </div>
+      
       
       {statusMessage && (
         <p className={`status-message ${statusMessage.includes("Error") || statusMessage.includes("not accessible") ? "error" : ""}`}>
